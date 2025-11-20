@@ -54,7 +54,8 @@ logger.addHandler(console_handler)
 
 # ===== 配置區 =====
 
-API_BASE_URL = "https://pcc-api.openfun.app/api"
+# 使用 Cloudflare Workers 反向代理（解決 GitHub Actions IP 封鎖問題）
+API_BASE_URL = "https://morning-pine-2053.alexabc.workers.dev/api"
 
 # API 請求 Headers（使用完整瀏覽器 headers 避免被阻擋）
 HEADERS = {
