@@ -1,13 +1,27 @@
-name: PCC 標案監控
+name: 政府標案監控
 
 on:
   schedule:
-    # 每小時執行一次（整點）
-    - cron: '0 * * * *'
-  workflow_dispatch:  # 允許手動觸發
+    # 日常監控：白天 08:00-18:00 每 2 小時（台北時間）→ UTC: 00:00-10:00
+    - cron: '0 0,2,4,6,8,10 * * *'
+    # 日報生成：每天 20:00（台北時間）→ UTC: 12:00
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '執行模式'
+        required: true
+        default: 'monitor'
+        type: choice
+        options:
+          - init
+          - monitor
+          - report
 
 jobs:
   monitor:
+    # 日常監控：排程 0,2,4,6,8,10 UTC 或手動觸發 monitor 模式
+    if: github.event.schedule == '0 0,2,4,6,8,10 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'monitor')
     runs-on: ubuntu-latest
 
     steps:
@@ -25,25 +39,143 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 執行標案監控
+    - name: 下載資料庫（恢復狀態）
+      uses: actions/download-artifact@v4
+      with:
+        name: tender-database
+        path: .
+      continue-on-error: true  # 首次執行時沒有 artifact
+
+    - name: 執行日常監控
       env:
         LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
       run: |
-        python monitor.py
+        python monitor.py --mode monitor
 
-    - name: 上傳資料庫（保留歷史記錄）
+    - name: 上傳資料庫（保存狀態）
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: tender-database-${{ github.run_number }}
+        name: tender-database
         path: tenders.db
-        retention-days: 30
+        retention-days: 90
 
     - name: 上傳日誌（如果失敗）
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: monitor-logs-${{ github.run_number }}
+        path: logs/
+        retention-days: 7
+
+  report:
+    # 日報生成：排程 12 UTC（台北時間 20:00）或手動觸發 report 模式
+    if: github.event.schedule == '0 12 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'report')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # Git 提交權限
+
+    steps:
+    - name: 檢出程式碼
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 設置 Python 環境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: 安裝依賴
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 下載資料庫（恢復狀態）
+      uses: actions/download-artifact@v4
+      with:
+        name: tender-database
+        path: .
+      continue-on-error: true
+
+    - name: 設定 Git 身份
+      run: |
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+
+    - name: 生成日報
+      env:
+        GIT_AUTO_COMMIT: "true"
+      run: |
+        python monitor.py --mode report
+
+    - name: 推送日報到 GitHub
+      if: success()
+      run: |
+        if git diff --quiet && git diff --cached --quiet; then
+          echo "無變更，跳過推送"
+        else
+          git push
+        fi
+
+    - name: 上傳日誌（如果失敗）
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: report-logs-${{ github.run_number }}
+        path: logs/
+        retention-days: 7
+
+  init:
+    # 初始化：僅手動觸發
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'init'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 檢出程式碼
+      uses: actions/checkout@v4
+
+    - name: 設置 Python 環境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: 安裝依賴
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 下載資料庫（恢復狀態）
+      uses: actions/download-artifact@v4
+      with:
+        name: tender-database
+        path: .
+      continue-on-error: true
+
+    - name: 執行初始化（增量補充）
+      env:
+        LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+      run: |
+        python monitor.py --mode init
+
+    - name: 上傳資料庫（保存狀態）
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: tender-database
+        path: tenders.db
+        retention-days: 90
+
+    - name: 上傳日誌（如果失敗）
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: init-logs-${{ github.run_number }}
         path: logs/
         retention-days: 7
