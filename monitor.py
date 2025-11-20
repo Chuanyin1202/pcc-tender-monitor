@@ -905,23 +905,51 @@ def init_mode():
     if not new_tenders:
         logger.info("所有標案皆已存在資料庫，無需新增")
     else:
-        logger.info(f"\n發現 {len(new_tenders)} 筆新標案，開始儲存...")
+        logger.info(f"\n發現 {len(new_tenders)} 筆新標案，開始查詢詳細資料...")
 
-        # 儲存新標案
+        # 查詢詳細資料並儲存
         saved_count = 0
-        for tender in new_tenders:
+        for idx, tender in enumerate(new_tenders, 1):
+            logger.info(f"  [{idx}/{len(new_tenders)}] 查詢: {tender['brief'][:50]}...")
+
+            # 查詢詳細資料取得預算和截止日期
+            result = get_tender_detail(tender['unit_id'], tender['job_number'])
+
+            if result is None:
+                logger.warning(f"    無法取得完整資訊，跳過")
+                continue
+
+            budget, pk_pms_main, deadline = result
+
+            # 預算過濾
+            if not (MIN_BUDGET <= budget <= MAX_BUDGET):
+                logger.debug(f"    預算不符 (${budget:,})")
+                continue
+
+            # 截止日期檢查
+            try:
+                deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M:%S")
+                if deadline_dt < datetime.now():
+                    logger.debug(f"    已截止")
+                    continue
+            except:
+                logger.debug(f"    截止日期格式錯誤")
+                continue
+
+            logger.info(f"    ✓ 符合條件! 預算: ${budget:,}, 截止: {deadline}")
+
             if save_tender(
                 unit_id=tender['unit_id'],
                 job_number=tender['job_number'],
                 brief=tender['brief'],
-                unit_name=tender.get('unit', ''),
-                budget=tender.get('budget', 0),
-                pk_pms_main=tender.get('pk_pms_main', ''),
-                deadline=tender.get('deadline', '')
+                unit_name=tender.get('unit_name', ''),
+                budget=budget,
+                pk_pms_main=pk_pms_main,
+                deadline=deadline
             ):
                 saved_count += 1
 
-        logger.info(f"成功儲存 {saved_count} 筆新標案")
+        logger.info(f"\n成功儲存 {saved_count} 筆新標案")
 
     # 統計最終結果
     final_count = count_active_tenders()
@@ -963,32 +991,73 @@ def monitor_mode():
 
     # 2. 查詢最近 1 天新標案
     logger.info("\n查詢最近 1 天新標案...")
-    all_tenders = fetch_tenders_by_date_range(days_to_search=1)
+    all_candidates = fetch_tenders_by_date_range(days_to_search=1)
 
-    if not all_tenders:
+    if not all_candidates:
         logger.info("未找到符合條件的標案")
         new_tenders = []
     else:
         # 過濾出真正的新標案
-        new_tenders = []
-        for tender in all_tenders:
+        candidates = []
+        for tender in all_candidates:
             if is_new_tender(tender['unit_id'], tender['job_number']):
-                new_tenders.append(tender)
+                candidates.append(tender)
+
+        if not candidates:
+            logger.info("無新標案")
+            new_tenders = []
+        else:
+            logger.info(f"發現 {len(candidates)} 筆候選新標案，開始查詢詳細資料...")
+
+            # 查詢詳細資料並儲存
+            new_tenders = []
+            for idx, tender in enumerate(candidates, 1):
+                logger.info(f"  [{idx}/{len(candidates)}] 查詢: {tender['brief'][:50]}...")
+
+                # 查詢詳細資料取得預算和截止日期
+                result = get_tender_detail(tender['unit_id'], tender['job_number'])
+
+                if result is None:
+                    logger.warning(f"    無法取得完整資訊，跳過")
+                    continue
+
+                budget, pk_pms_main, deadline = result
+
+                # 預算過濾
+                if not (MIN_BUDGET <= budget <= MAX_BUDGET):
+                    logger.debug(f"    預算不符 (${budget:,})")
+                    continue
+
+                # 截止日期檢查
+                try:
+                    deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M:%S")
+                    if deadline_dt < datetime.now():
+                        logger.debug(f"    已截止")
+                        continue
+                except:
+                    logger.debug(f"    截止日期格式錯誤")
+                    continue
+
+                logger.info(f"    ✓ 符合條件! 預算: ${budget:,}, 截止: {deadline}")
+
                 # 儲存新標案
-                save_tender(
+                if save_tender(
                     unit_id=tender['unit_id'],
                     job_number=tender['job_number'],
                     brief=tender['brief'],
-                    unit_name=tender.get('unit', ''),
-                    budget=tender.get('budget', 0),
-                    pk_pms_main=tender.get('pk_pms_main', ''),
-                    deadline=tender.get('deadline', '')
-                )
+                    unit_name=tender.get('unit_name', ''),
+                    budget=budget,
+                    pk_pms_main=pk_pms_main,
+                    deadline=deadline
+                ):
+                    new_tenders.append({
+                        'brief': tender['brief'],
+                        'unit': tender.get('unit_name', ''),
+                        'budget': budget,
+                        'deadline': deadline
+                    })
 
-        if new_tenders:
-            logger.info(f"發現 {len(new_tenders)} 筆新標案")
-        else:
-            logger.info("無新標案")
+            logger.info(f"成功儲存 {len(new_tenders)} 筆新標案")
 
     # 3. 統計結果
     active_count = count_active_tenders()
