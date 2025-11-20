@@ -75,8 +75,10 @@ HEADERS = {
 MIN_BUDGET = 150000
 MAX_BUDGET = 1500000
 
-# 關鍵字過濾（標案標題必須包含至少一個）
-KEYWORDS_INCLUDE = ["軟體", "系統", "APP", "網站", "資訊", "開發", "建置"]
+# 搜尋關鍵字（使用 searchbytitle API,伺服器端過濾）
+SEARCH_KEYWORDS = ["軟體", "APP", "網站", "應用程式"]
+
+# 排除關鍵字（本地端二次過濾）
 KEYWORDS_EXCLUDE = [
     "硬體", "電腦", "監控", "機房", "土木", "網路設備", "交換器",
     "設備維護", "設備保養", "機電", "空調", "電梯", "消防系統",
@@ -85,7 +87,8 @@ KEYWORDS_EXCLUDE = [
     "抽水", "給水", "排水", "管線維護", "道路維護", "設施維護",
     "道路", "路面", "交通設施", "花木", "綠地", "垃圾", "清運",
     "手術", "顯微鏡", "醫療設備", "保全", "廣播系統", "景觀設施",
-    "石綿", "回饋金", "灌溉", "熱泵", "噴水", "附加儲存", "NAS"
+    "石綿", "回饋金", "灌溉", "熱泵", "噴水", "附加儲存", "NAS",
+    "消防", "電力", "機械", "儀器", "儀控"
 ]
 
 # LINE Messaging API 配置（從環境變數讀取）
@@ -94,9 +97,6 @@ LINE_USER_ID = os.getenv("LINE_USER_ID", "")
 
 # 資料庫路徑
 DB_PATH = "tenders.db"
-
-# 首次執行時搜尋最近幾天的標案
-INITIAL_SEARCH_DAYS = 30
 
 # API 請求間隔（秒）
 API_DELAY = 0.5
@@ -133,29 +133,6 @@ def init_db():
     except sqlite3.Error as e:
         logger.error(f"資料庫初始化失敗: {e}")
         raise
-
-
-def get_last_check_time():
-    """從資料庫讀取最後檢查時間，用於增量查詢"""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT MAX(date_added) FROM tenders")
-            result = cursor.fetchone()[0]
-
-            if result:
-                last_time = datetime.strptime(result, "%Y-%m-%d %H:%M:%S")
-                logger.debug(f"最後檢查時間: {last_time}")
-                return last_time
-            else:
-                # 首次執行，回溯 INITIAL_SEARCH_DAYS 天
-                initial_time = datetime.now() - timedelta(days=INITIAL_SEARCH_DAYS)
-                logger.debug(f"首次執行，回溯 {INITIAL_SEARCH_DAYS} 天")
-                return initial_time
-    except sqlite3.Error as e:
-        logger.error(f"查詢最後檢查時間失敗: {e}")
-        # 發生錯誤時，回溯 INITIAL_SEARCH_DAYS 天
-        return datetime.now() - timedelta(days=INITIAL_SEARCH_DAYS)
 
 
 def is_new_tender(unit_id, job_number):
@@ -399,7 +376,7 @@ def get_tender_detail(unit_id, job_number):
 
 
 def fetch_tenders():
-    """抓取並過濾政府採購標案（使用增量查詢）"""
+    """抓取並過濾政府採購標案（使用 searchbytitle API）"""
     logger.info("="*60)
     logger.info("開始抓取資料...")
     logger.info("="*60)
@@ -411,29 +388,18 @@ def fetch_tenders():
         # 清理 3 個月前的舊資料
         cleanup_old_tenders()
 
-        # 確定搜尋範圍（增量查詢）
-        last_check = get_last_check_time()
         today = datetime.now()
-
-        # 生成查詢日期列表
-        search_dates = []
-        current = last_check.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = today
-
-        while current <= end:
-            search_dates.append(current.strftime("%Y%m%d"))
-            current += timedelta(days=1)
-
-        logger.info(f"查詢日期範圍: {len(search_dates)} 天 (從 {search_dates[0]} 到 {search_dates[-1]})")
-
         new_cases = []
+        processed_tenders = set()  # 去重：同一標案可能出現在多個關鍵字結果中
 
-        # 抓取指定日期範圍的標案
-        for search_date in search_dates:
-            logger.info(f"查詢 {search_date} 的標案...")
+        # 使用 searchbytitle API 搜尋關鍵字
+        logger.info(f"搜尋關鍵字: {', '.join(SEARCH_KEYWORDS)}")
 
-            url = f"{API_BASE_URL}/listbydate"
-            params = {'date': search_date}
+        for keyword in SEARCH_KEYWORDS:
+            logger.info(f"\n搜尋關鍵字: 「{keyword}」")
+
+            url = f"{API_BASE_URL}/searchbytitle"
+            params = {'query': keyword, 'page': 1}
 
             try:
                 response = requests.get(url, params=params, headers=HEADERS, timeout=API_TIMEOUT)
@@ -441,10 +407,11 @@ def fetch_tenders():
 
                 data = response.json()
                 records = data.get('records', [])
+                total_records = data.get('total_records', 0)
 
-                logger.info(f"  找到 {len(records)} 筆原始資料")
+                logger.info(f"  找到 {total_records} 筆，處理第 1 頁 ({len(records)} 筆)")
 
-                # 第一階段：標題關鍵字過濾
+                # 處理搜尋結果
                 for record in records:
                     brief_data = record.get('brief', {})
                     title = brief_data.get('title', '')
@@ -452,21 +419,27 @@ def fetch_tenders():
                     job_number = record.get('job_number', '')
                     unit_name = record.get('unit_name', 'N/A')
 
-                    # 排除關鍵字檢查
-                    if any(keyword in title for keyword in KEYWORDS_EXCLUDE):
+                    # 去重檢查
+                    tender_key = f"{unit_id}/{job_number}"
+                    if tender_key in processed_tenders:
+                        logger.debug(f"    跳過重複標案: {title[:40]}...")
                         continue
 
-                    # 包含關鍵字檢查
-                    if not any(keyword in title for keyword in KEYWORDS_INCLUDE):
+                    processed_tenders.add(tender_key)
+
+                    # 排除關鍵字檢查
+                    if any(exclude_kw in title for exclude_kw in KEYWORDS_EXCLUDE):
+                        logger.debug(f"    排除: {title[:40]}... (包含排除關鍵字)")
                         continue
 
                     # 檢查是否為新案
                     if not is_new_tender(unit_id, job_number):
+                        logger.debug(f"    跳過已存在標案: {title[:40]}...")
                         continue
 
-                    logger.info(f"  ✓ 發現關鍵字匹配: {title[:40]}...")
+                    logger.info(f"  ✓ 發現候選標案: {title[:60]}...")
 
-                    # 第二階段：查詢詳細資料取得預算和 pkPmsMain
+                    # 查詢詳細資料取得預算和 pkPmsMain
                     result = get_tender_detail(unit_id, job_number)
 
                     if result is None:
@@ -501,15 +474,15 @@ def fetch_tenders():
                         })
 
             except requests.exceptions.Timeout:
-                logger.error(f"查詢 {search_date} 超時，跳過")
+                logger.error(f"搜尋「{keyword}」超時，跳過")
                 continue
             except requests.exceptions.RequestException as e:
-                logger.error(f"查詢 {search_date} 失敗: {e}")
+                logger.error(f"搜尋「{keyword}」失敗: {e}")
                 continue
 
         # 輸出結果
         logger.info("="*60)
-        logger.info(f"本次發現 {len(new_cases)} 筆新標案")
+        logger.info(f"本次發現 {len(new_cases)} 筆新標案（已處理 {len(processed_tenders)} 筆候選標案）")
         logger.info("="*60)
 
         if new_cases:
