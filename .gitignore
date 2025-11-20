@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虛擬環境
+venv/
+env/
+ENV/
+
+# 資料庫
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# macOS
+.DS_Store
+
+# 環境變數
+.env
+
+# Logs
+logs/
+*.log
+
+# Backup files
+*.backup
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+.coverage
+htmlcov/
+
+# 開發日報（可能包含敏感資訊）
+docs/daily/
