@@ -1,0 +1,10 @@
+name = "pcc-api-proxy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# 路由設定（部署後會自動配置）
+# workers_dev = true 表示使用 workers.dev 子網域
+
+# 環境變數（如果需要）
+# [vars]
+# TARGET_API = "https://pcc-api.openfun.app"
