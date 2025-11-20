@@ -559,6 +559,8 @@ def fetch_tenders_by_date_range(days_to_search):
                 if any(kw in title for kw in SEARCH_KEYWORDS):
                     # 檢查排除關鍵字
                     if not any(ex_kw in title for ex_kw in KEYWORDS_EXCLUDE):
+                        # 標準化資料結構：brief 改為字串
+                        record['brief'] = title
                         record['publish_date'] = target_date.strftime('%Y-%m-%d')
                         record['status'] = tender_type
                         all_candidates.append(record)
