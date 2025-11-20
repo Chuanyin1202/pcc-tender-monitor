@@ -913,9 +913,9 @@ def init_mode():
                 job_number=tender['job_number'],
                 brief=tender['brief'],
                 unit_name=tender.get('unit', ''),
-                budget=tender['budget'],
+                budget=tender.get('budget', 0),
                 pk_pms_main=tender.get('pk_pms_main', ''),
-                deadline=tender['deadline']
+                deadline=tender.get('deadline', '')
             ):
                 saved_count += 1
 
@@ -978,9 +978,9 @@ def monitor_mode():
                     job_number=tender['job_number'],
                     brief=tender['brief'],
                     unit_name=tender.get('unit', ''),
-                    budget=tender['budget'],
+                    budget=tender.get('budget', 0),
                     pk_pms_main=tender.get('pk_pms_main', ''),
-                    deadline=tender['deadline']
+                    deadline=tender.get('deadline', '')
                 )
 
         if new_tenders:
