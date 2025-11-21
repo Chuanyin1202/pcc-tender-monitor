@@ -986,6 +986,45 @@ def sync_mode():
         logger.info("💡 提示：設定 LINE_CHANNEL_ACCESS_TOKEN 和 LINE_USER_ID 環境變數即可啟用推播通知")
 
 
+def classify_tender_type(brief):
+    """
+    識別標案類型
+
+    Args:
+        brief: 標案名稱
+
+    Returns:
+        str: 'maintenance' (維護), 'development' (開發), 'procurement' (採購), 'engineering' (工程), 'other' (其他)
+    """
+    brief_lower = brief.lower()
+
+    # 維護類 - 最高優先
+    maintenance_keywords = ['維護', '功能增修', '擴充維護', '系統管理', '維運']
+    if any(k in brief for k in maintenance_keywords):
+        # 排除設備維護
+        if not any(k in brief for k in ['設備維護', '機械維護', '建築維護']):
+            return 'maintenance'
+
+    # 開發建置類
+    development_keywords = ['建置', '開發', '建立', '設計', '規劃']
+    software_keywords = ['系統', '網站', '平台', 'app', '資訊', '軟體', '程式']
+    if any(k in brief for k in development_keywords):
+        if any(k in brief for k in software_keywords):
+            return 'development'
+
+    # 設備採購類
+    procurement_keywords = ['設備', '採購', '軟體授權', '一批', '一台', '一組', '設備財物']
+    if any(k in brief for k in procurement_keywords):
+        return 'procurement'
+
+    # 工程類
+    engineering_keywords = ['工程', '建築', '裝修', '安裝', '施工']
+    if any(k in brief for k in engineering_keywords):
+        return 'engineering'
+
+    return 'other'
+
+
 def report_mode():
     """
     日報生成模式（每天 20:00 執行）
@@ -1077,100 +1116,117 @@ def report_mode():
     # 新增標案：分類呈現
     if new_today:
         # 分類標案
-        high_priority = []  # 最有利標 + 預算 > 100萬
-        worth_attention = []  # 最低標 + 免押標金 + 電子投標
-        others = []
+        high_priority = []  # 維護案 + 預算 ≤ 50萬
+        worth_attention = []  # 開發案 + 預算 ≤ 50萬
+        others = []  # 其他（預算太高或非軟體類）
 
         for tender in new_today:
-            is_advantageous = '最有利標' in tender.get('award_type', '')
-            is_high_budget = tender.get('budget', 0) >= 1000000
-            is_lowest = '最低標' in tender.get('award_type', '')
-            no_deposit = tender.get('requires_deposit', 1) == 0
-            is_electronic = tender.get('is_electronic', 0) == 1
+            tender_type = classify_tender_type(tender['brief'])
+            budget = tender.get('budget', 0)
+            is_affordable = budget <= 500000
 
-            if is_advantageous and is_high_budget:
+            # 計算不符合原因（用於「其他」分類）
+            exclusion_reasons = []
+            if budget > 500000:
+                exclusion_reasons.append('預算超出')
+            if tender_type in ['procurement', 'engineering']:
+                exclusion_reasons.append('非軟體類')
+            if tender_type == 'other':
+                exclusion_reasons.append('類型不符')
+
+            # 將不符原因加入 tender 字典
+            tender['exclusion_reason'] = '、'.join(exclusion_reasons) if exclusion_reasons else ''
+            tender['tender_type'] = tender_type
+
+            # 分類邏輯
+            if tender_type == 'maintenance' and is_affordable:
                 high_priority.append(tender)
-            elif is_lowest and no_deposit and is_electronic:
+            elif tender_type == 'development' and is_affordable:
                 worth_attention.append(tender)
             else:
                 others.append(tender)
 
         # 高優先級標案
         if high_priority:
-            report += "## 🔥 高優先級標案（最有利標 + 預算 > 100萬）\n\n"
+            report += "## 🔥 高優先級：維護案（預算 ≤ 50萬）\n\n"
             for idx, tender in enumerate(high_priority, 1):
                 report += f"### {idx}. {tender['brief']}\n\n"
-                report += "**📊 基本資訊**\n"
-                report += f"- 💰 預算：${tender['budget']:,}\n"
 
-                # 計算剩餘天數
+                # 基本資訊
+                report += "**💰 預算**：${:,}\n".format(tender['budget'])
+
+                # 計算剩餘天數與緊急標示
                 try:
                     deadline_dt = datetime.strptime(tender['deadline'], "%Y-%m-%d %H:%M:%S")
                     days_left = (deadline_dt - datetime.now()).days
-                    days_tag = f"剩 {days_left} 天" if days_left > 0 else "⚠️ 即將截止"
+                    if days_left <= 3:
+                        days_tag = f"剩 {days_left} 天 🔥"
+                    elif days_left <= 7:
+                        days_tag = f"剩 {days_left} 天 ⚡"
+                    else:
+                        days_tag = f"剩 {days_left} 天"
                 except:
-                    days_tag = ""
+                    days_tag = "未知"
 
-                report += f"- ⏰ 截止：{tender['deadline'][:16]}（{days_tag}）\n"
-                report += f"- 🏢 機關：{tender['unit']}\n"
-                report += f"- 🔗 [查看詳情]({tender['url']})\n\n"
+                report += f"**⏰ 截止**：{tender['deadline'][:10]}（{days_tag}）\n"
+                report += f"**🏢 機關**：{tender['unit']}\n"
+                report += f"**🔗 連結**：[查看詳情]({tender['url']})\n\n"
 
-                report += "**🎯 投標條件**\n"
-                report += f"- 決標方式：🏆 {tender['award_type']}\n"
-                report += f"- 電子投標：{'💻 支援' if tender['is_electronic'] else '❌ 不支援'}\n"
-                report += f"- 押標金：{'✅ 免繳納' if not tender['requires_deposit'] else '⚠️ 需繳納'}\n"
-                report += f"- 履約期限：{tender['contract_duration'] or '未提供'}\n\n"
-
-                if tender['qualification_summary']:
-                    report += "**📋 資格要求**\n"
-                    report += f"{tender['qualification_summary']}\n\n"
+                # 案件特性
+                report += "**📋 案件特性**\n"
+                report += "- ✅ 類型：年度維護案（重複性高）\n"
+                report += "- ✅ 適合能力：系統維護/運維\n"
+                report += "- ✅ 風險評估：低風險，穩定收入\n\n"
 
                 report += "---\n\n"
 
         # 值得關注的標案
         if worth_attention:
-            report += "## ⚡ 值得關注（最低標 + 免押標金 + 電子投標）\n\n"
+            report += "## ⚡ 值得關注：開發案（預算 ≤ 50萬）\n\n"
             for idx, tender in enumerate(worth_attention, 1):
                 report += f"### {idx}. {tender['brief']}\n\n"
-                report += "**📊 基本資訊**\n"
-                report += f"- 💰 預算：${tender['budget']:,}\n"
 
+                # 基本資訊
+                report += "**💰 預算**：${:,}\n".format(tender['budget'])
+
+                # 計算剩餘天數與緊急標示
                 try:
                     deadline_dt = datetime.strptime(tender['deadline'], "%Y-%m-%d %H:%M:%S")
                     days_left = (deadline_dt - datetime.now()).days
-                    days_tag = f"剩 {days_left} 天" if days_left > 0 else "⚠️ 即將截止"
+                    if days_left <= 3:
+                        days_tag = f"剩 {days_left} 天 🔥"
+                    elif days_left <= 7:
+                        days_tag = f"剩 {days_left} 天 ⚡"
+                    else:
+                        days_tag = f"剩 {days_left} 天"
                 except:
-                    days_tag = ""
+                    days_tag = "未知"
 
-                report += f"- ⏰ 截止：{tender['deadline'][:16]}（{days_tag}）\n"
-                report += f"- 🏢 機關：{tender['unit']}\n"
-                report += f"- 🔗 [查看詳情]({tender['url']})\n\n"
+                report += f"**⏰ 截止**：{tender['deadline'][:10]}（{days_tag}）\n"
+                report += f"**🏢 機關**：{tender['unit']}\n"
+                report += f"**🔗 連結**：[查看詳情]({tender['url']})\n\n"
 
-                report += "**🎯 投標條件**\n"
-                report += f"- 決標方式：💸 {tender['award_type']}\n"
-                report += f"- 電子投標：{'💻 支援' if tender['is_electronic'] else '❌ 不支援'}\n"
-                report += f"- 押標金：{'✅ 免繳納' if not tender['requires_deposit'] else '⚠️ 需繳納'}\n"
-                report += f"- 履約期限：{tender['contract_duration'] or '未提供'}\n\n"
-
-                if tender['qualification_summary']:
-                    report += "**📋 資格要求**\n"
-                    report += f"{tender['qualification_summary']}\n\n"
+                # 案件特性
+                report += "**📋 案件特性**\n"
+                report += "- ⚡ 類型：新系統開發\n"
+                report += "- ⚡ 適合能力：新系統開發\n"
+                report += "- ⚠️ 風險評估：中風險，有後續維護機會\n\n"
 
                 report += "---\n\n"
 
         # 其他標案
         if others:
             report += "## 📌 其他標案\n\n"
-            report += "| 標案名稱 | 預算 | 決標方式 | 截止日期 | 連結 |\n"
+            report += "| 標案名稱 | 預算 | 不符原因 | 截止日期 | 連結 |\n"
             report += "|---------|------|----------|----------|------|\n"
 
             for tender in others:
                 brief = tender['brief'][:60] + '...' if len(tender['brief']) > 60 else tender['brief']
                 budget = f"${tender['budget']:,}"
-                award_type = tender.get('award_type', 'N/A')
+                exclusion_reason = tender.get('exclusion_reason', '未分類')
                 deadline = tender['deadline'][:10] if tender.get('deadline') else 'N/A'
                 link = f"[查看]({tender['url']})" if tender.get('url') else 'N/A'
-                report += f"| {brief} | {budget} | {award_type} | {deadline} | {link} |\n"
+                report += f"| {brief} | {budget} | {exclusion_reason} | {deadline} | {link} |\n"
 
             report += "\n"
     else:
