@@ -39,15 +39,26 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: 查找最新的有效資料庫 artifact
+      id: find-db
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ARTIFACT_ID=$(gh api '/repos/${{ github.repository }}/actions/artifacts?per_page=100' \
+          --jq '.artifacts[] | select(.name == "tender-database" and .size_in_bytes > 1000) | .id' \
+          | head -1)
+        echo "artifact_id=${ARTIFACT_ID:-null}" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
     - name: 下載資料庫（恢復狀態）
-      uses: dawidd6/action-download-artifact@v6
-      with:
-        name: tender-database
-        path: .
-        workflow: monitor.yml
-        workflow_conclusion: success
-        if_no_artifact_found: ignore
-      continue-on-error: true  # 首次執行時沒有 artifact
+      if: steps.find-db.outputs.artifact_id != 'null' && steps.find-db.outputs.artifact_id != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh api /repos/${{ github.repository }}/actions/artifacts/${{ steps.find-db.outputs.artifact_id }}/zip > tenders.db.zip
+        unzip -o tenders.db.zip
+        rm tenders.db.zip
+      continue-on-error: true
 
     - name: 執行日常監控
       env:
@@ -98,14 +109,25 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: 查找最新的有效資料庫 artifact
+      id: find-db-report
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ARTIFACT_ID=$(gh api '/repos/${{ github.repository }}/actions/artifacts?per_page=100' \
+          --jq '.artifacts[] | select(.name == "tender-database" and .size_in_bytes > 1000) | .id' \
+          | head -1)
+        echo "artifact_id=${ARTIFACT_ID:-null}" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
     - name: 下載資料庫（恢復狀態）
-      uses: dawidd6/action-download-artifact@v6
-      with:
-        name: tender-database
-        path: .
-        workflow: monitor.yml
-        workflow_conclusion: success
-        if_no_artifact_found: ignore
+      if: steps.find-db-report.outputs.artifact_id != 'null' && steps.find-db-report.outputs.artifact_id != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh api /repos/${{ github.repository }}/actions/artifacts/${{ steps.find-db-report.outputs.artifact_id }}/zip > tenders.db.zip
+        unzip -o tenders.db.zip
+        rm tenders.db.zip
       continue-on-error: true
 
     - name: 設定 Git 身份
@@ -156,14 +178,25 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: 查找最新的有效資料庫 artifact
+      id: find-db-init
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ARTIFACT_ID=$(gh api '/repos/${{ github.repository }}/actions/artifacts?per_page=100' \
+          --jq '.artifacts[] | select(.name == "tender-database" and .size_in_bytes > 1000) | .id' \
+          | head -1)
+        echo "artifact_id=${ARTIFACT_ID:-null}" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
     - name: 下載資料庫（恢復狀態）
-      uses: dawidd6/action-download-artifact@v6
-      with:
-        name: tender-database
-        path: .
-        workflow: monitor.yml
-        workflow_conclusion: success
-        if_no_artifact_found: ignore
+      if: steps.find-db-init.outputs.artifact_id != 'null' && steps.find-db-init.outputs.artifact_id != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh api /repos/${{ github.repository }}/actions/artifacts/${{ steps.find-db-init.outputs.artifact_id }}/zip > tenders.db.zip
+        unzip -o tenders.db.zip
+        rm tenders.db.zip
       continue-on-error: true
 
     - name: 執行初始化（增量補充）
