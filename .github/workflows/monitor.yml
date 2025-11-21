@@ -143,11 +143,7 @@ jobs:
     - name: 推送日報到 GitHub
       if: success()
       run: |
-        if git diff --quiet && git diff --cached --quiet; then
-          echo "無變更，跳過推送"
-        else
-          git push
-        fi
+        git push
 
     - name: 上傳日誌（如果失敗）
       if: failure()
