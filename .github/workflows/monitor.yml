@@ -40,10 +40,13 @@ jobs:
         pip install -r requirements.txt
 
     - name: 下載資料庫（恢復狀態）
-      uses: actions/download-artifact@v4
+      uses: dawidd6/action-download-artifact@v6
       with:
         name: tender-database
         path: .
+        workflow: monitor.yml
+        workflow_conclusion: success
+        if_no_artifact_found: ignore
       continue-on-error: true  # 首次執行時沒有 artifact
 
     - name: 執行日常監控
@@ -96,10 +99,13 @@ jobs:
         pip install -r requirements.txt
 
     - name: 下載資料庫（恢復狀態）
-      uses: actions/download-artifact@v4
+      uses: dawidd6/action-download-artifact@v6
       with:
         name: tender-database
         path: .
+        workflow: monitor.yml
+        workflow_conclusion: success
+        if_no_artifact_found: ignore
       continue-on-error: true
 
     - name: 設定 Git 身份
@@ -151,10 +157,13 @@ jobs:
         pip install -r requirements.txt
 
     - name: 下載資料庫（恢復狀態）
-      uses: actions/download-artifact@v4
+      uses: dawidd6/action-download-artifact@v6
       with:
         name: tender-database
         path: .
+        workflow: monitor.yml
+        workflow_conclusion: success
+        if_no_artifact_found: ignore
       continue-on-error: true
 
     - name: 執行初始化（增量補充）
