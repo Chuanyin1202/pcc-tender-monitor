@@ -1054,7 +1054,8 @@ def monitor_mode():
                         'brief': tender['brief'],
                         'unit': tender.get('unit_name', ''),
                         'budget': budget,
-                        'deadline': deadline
+                        'deadline': deadline,
+                        'pk_pms_main': pk_pms_main
                     })
 
             logger.info(f"成功儲存 {len(new_tenders)} 筆新標案")
