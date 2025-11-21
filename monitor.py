@@ -486,7 +486,19 @@ def get_tender_detail(unit_id, job_number):
 
         data = response.json()
         if 'records' in data and len(data['records']) > 0:
-            detail = data['records'][0].get('detail', {})
+            records = data['records']
+
+            # 優先選擇「公開招標公告」類型（包含 pkPmsMain），如果有多筆取日期最新的
+            tender_records = [r for r in records if r.get('detail', {}).get('type') == '公開招標公告']
+
+            if tender_records:
+                # 如果有多筆招標公告，取日期最新的
+                selected_record = max(tender_records, key=lambda r: r.get('date', 0))
+            else:
+                # 如果沒有「公開招標公告」，取所有 records 中日期最新的
+                selected_record = max(records, key=lambda r: r.get('date', 0))
+
+            detail = selected_record.get('detail', {})
             budget_str = detail.get('採購資料:預算金額', '')
             pk_pms_main = detail.get('pkPmsMain', '')
             deadline_str = detail.get('領投開標:截止投標', '')
