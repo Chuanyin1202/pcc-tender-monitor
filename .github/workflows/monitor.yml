@@ -2,26 +2,25 @@ name: 政府標案監控
 
 on:
   schedule:
-    # 日常監控：白天 08:00-18:00 每 2 小時（台北時間）→ UTC: 00:00-10:00
-    - cron: '0 0,2,4,6,8,10 * * *'
-    # 日報生成：每天 20:00（台北時間）→ UTC: 12:00
+    # sync: 每天 20:00 台灣時間 (UTC: 12:00)
     - cron: '0 12 * * *'
+    # report: 每天 08:00 台灣時間 (UTC: 00:00)
+    - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
       mode:
         description: '執行模式'
         required: true
-        default: 'monitor'
+        default: 'sync'
         type: choice
         options:
-          - init
-          - monitor
+          - sync
           - report
 
 jobs:
-  monitor:
-    # 日常監控：排程 0,2,4,6,8,10 UTC 或手動觸發 monitor 模式
-    if: github.event.schedule == '0 0,2,4,6,8,10 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'monitor')
+  sync:
+    # 同步模式：排程 12 UTC（台灣時間 20:00）或手動觸發 sync 模式
+    if: github.event.schedule == '0 12 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
     runs-on: ubuntu-latest
 
     steps:
@@ -60,12 +59,12 @@ jobs:
         rm tenders.db.zip
       continue-on-error: true
 
-    - name: 執行日常監控
+    - name: 執行資料同步
       env:
         LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
       run: |
-        python monitor.py --mode monitor
+        python monitor.py --mode sync
 
     - name: 上傳資料庫（保存狀態）
       uses: actions/upload-artifact@v4
@@ -79,13 +78,13 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: monitor-logs-${{ github.run_number }}
+        name: sync-logs-${{ github.run_number }}
         path: logs/
         retention-days: 7
 
   report:
-    # 日報生成：排程 12 UTC（台北時間 20:00）或手動觸發 report 模式
-    if: github.event.schedule == '0 12 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'report')
+    # 日報生成：排程 0 UTC（台灣時間 08:00）或手動觸發 report 模式
+    if: github.event.schedule == '0 0 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'report')
     runs-on: ubuntu-latest
 
     permissions:
@@ -155,69 +154,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: report-logs-${{ github.run_number }}
-        path: logs/
-        retention-days: 7
-
-  init:
-    # 初始化：僅手動觸發
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'init'
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: 檢出程式碼
-      uses: actions/checkout@v4
-
-    - name: 設置 Python 環境
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-
-    - name: 安裝依賴
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: 查找最新的有效資料庫 artifact
-      id: find-db-init
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        ARTIFACT_ID=$(gh api '/repos/${{ github.repository }}/actions/artifacts?per_page=100' \
-          --jq '.artifacts[] | select(.name == "tender-database" and .size_in_bytes > 1000) | .id' \
-          | head -1)
-        echo "artifact_id=${ARTIFACT_ID:-null}" >> $GITHUB_OUTPUT
-      continue-on-error: true
-
-    - name: 下載資料庫（恢復狀態）
-      if: steps.find-db-init.outputs.artifact_id != 'null' && steps.find-db-init.outputs.artifact_id != ''
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        gh api /repos/${{ github.repository }}/actions/artifacts/${{ steps.find-db-init.outputs.artifact_id }}/zip > tenders.db.zip
-        unzip -o tenders.db.zip
-        rm tenders.db.zip
-      continue-on-error: true
-
-    - name: 執行初始化（增量補充）
-      env:
-        LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-        LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-      run: |
-        python monitor.py --mode init
-
-    - name: 上傳資料庫（保存狀態）
-      uses: actions/upload-artifact@v4
-      if: success()
-      with:
-        name: tender-database
-        path: tenders.db
-        retention-days: 90
-
-    - name: 上傳日誌（如果失敗）
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: init-logs-${{ github.run_number }}
         path: logs/
         retention-days: 7

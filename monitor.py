@@ -787,144 +787,48 @@ def count_active_tenders():
         return 0
 
 
-def archive_ended_tenders():
-    """
-    將已結束的標案移至歸檔表
-
-    結束條件：
-    - 狀態包含：決標、廢標、無法決標、取消
-    - 或截止日期已過
-
-    Returns:
-        list: 已歸檔的標案列表（用於日報）
-    """
-    archived_tenders = []
-
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-
-            # 查詢需要歸檔的標案
-            cursor.execute("""
-                SELECT unit_id, job_number, brief, budget, deadline, status
-                FROM tenders
-                WHERE (
-                    status LIKE '%決標%' OR
-                    status LIKE '%廢標%' OR
-                    status LIKE '%無法決標%' OR
-                    status LIKE '%取消%' OR
-                    deadline < datetime('now')
-                )
-            """)
-
-            to_archive = cursor.fetchall()
-
-            if not to_archive:
-                logger.info("無需歸檔的標案")
-                return []
-
-            logger.info(f"找到 {len(to_archive)} 筆需要歸檔的標案")
-
-            # 移動到歸檔表
-            for tender in to_archive:
-                unit_id, job_number, brief, budget, deadline, status = tender
-
-                # 判斷歸檔原因
-                if status and '決標' in status:
-                    reason = '決標'
-                elif status and '廢標' in status:
-                    reason = '廢標'
-                elif status and '無法決標' in status:
-                    reason = '無法決標'
-                elif status and '取消' in status:
-                    reason = '取消'
-                else:
-                    reason = '過期'
-
-                # 複製到歸檔表
-                cursor.execute("""
-                    INSERT OR REPLACE INTO tenders_archive
-                    SELECT *, datetime('now'), ?
-                    FROM tenders
-                    WHERE unit_id = ? AND job_number = ?
-                """, (reason, unit_id, job_number))
-
-                # 從主表刪除
-                cursor.execute("""
-                    DELETE FROM tenders
-                    WHERE unit_id = ? AND job_number = ?
-                """, (unit_id, job_number))
-
-                archived_tenders.append({
-                    'brief': brief,
-                    'budget': budget,
-                    'deadline': deadline,
-                    'reason': reason
-                })
-
-                logger.info(f"  歸檔: {brief[:40]}... ({reason})")
-
-            conn.commit()
-            logger.info(f"成功歸檔 {len(archived_tenders)} 筆標案")
-
-    except Exception as e:
-        logger.error(f"歸檔標案失敗: {e}")
-
-    return archived_tenders
-
-
 # ============================================================
-# 新架構：三種執行模式
+# 執行模式
 # ============================================================
 
-def init_mode():
+def sync_mode():
     """
-    初始化模式（增量補充）
+    同步模式：每天完整同步 14 天資料
 
-    - 檢查資料庫現狀
-    - 掃描 14 天資料
-    - 只新增資料庫中不存在的標案
-    - 發送完成通知
+    - 重新抓取 14 天資料
+    - 與資料庫對比同步
+    - 刪除已結束/過期的標案
+    - 發送新案通知
     """
     logger.info("="*60)
-    logger.info("執行模式：初始化（增量補充）")
+    logger.info("執行模式：資料同步")
     logger.info("="*60)
 
-    # 檢查資料庫現狀
-    existing_count = count_active_tenders()
-    if existing_count > 0:
-        logger.info(f"資料庫已有 {existing_count} 筆活躍標案")
-        logger.info("執行增量補充模式...")
-    else:
-        logger.info("資料庫為空，執行完整初始化...")
-
-    # 呼叫現有函數掃描 14 天資料
+    # 1. 重新抓取 14 天資料
     logger.info("\n開始掃描最近 14 天標案...")
-    all_tenders = fetch_tenders_by_date_range(days_to_search=14)
+    all_candidates = fetch_tenders_by_date_range(days_to_search=14)
 
-    if not all_tenders:
+    if not all_candidates:
         logger.info("未找到符合條件的標案")
         return
 
-    logger.info(f"掃描完成，找到 {len(all_tenders)} 筆符合條件的標案")
+    logger.info(f"掃描完成，找到 {len(all_candidates)} 筆符合條件的標案")
 
-    # 過濾出資料庫中不存在的標案
-    new_tenders = []
-    for tender in all_tenders:
+    # 2. 建立「當前應該存在」的標案集合
+    current_tender_keys = set()
+    new_tenders = []  # 用於通知
+
+    # 3. 處理每個候選標案
+    logger.info("\n處理候選標案...")
+    for idx, tender in enumerate(all_candidates, 1):
+        key = (tender['unit_id'], tender['job_number'])
+        current_tender_keys.add(key)
+
+        # 檢查是否為新案
         if is_new_tender(tender['unit_id'], tender['job_number']):
-            new_tenders.append(tender)
+            logger.info(f"  [{idx}/{len(all_candidates)}] 新案: {tender['brief'][:50]}...")
 
-    if not new_tenders:
-        logger.info("所有標案皆已存在資料庫，無需新增")
-    else:
-        logger.info(f"\n發現 {len(new_tenders)} 筆新標案，開始查詢詳細資料...")
-
-        # 查詢詳細資料並儲存
-        saved_count = 0
-        for idx, tender in enumerate(new_tenders, 1):
-            logger.info(f"  [{idx}/{len(new_tenders)}] 查詢: {tender['brief'][:50]}...")
-
-            # 查詢詳細資料取得預算和截止日期
+            # 查詢詳細資料
             result = get_tender_detail(tender['unit_id'], tender['job_number'])
 
             if result is None:
@@ -950,6 +854,7 @@ def init_mode():
 
             logger.info(f"    ✓ 符合條件! 預算: ${budget:,}, 截止: {deadline}")
 
+            # 儲存新標案
             if save_tender(
                 unit_id=tender['unit_id'],
                 job_number=tender['job_number'],
@@ -959,134 +864,51 @@ def init_mode():
                 pk_pms_main=pk_pms_main,
                 deadline=deadline
             ):
-                saved_count += 1
+                new_tenders.append({
+                    'brief': tender['brief'],
+                    'unit': tender.get('unit_name', ''),
+                    'budget': budget,
+                    'deadline': deadline,
+                    'pk_pms_main': pk_pms_main
+                })
 
-        logger.info(f"\n成功儲存 {saved_count} 筆新標案")
+    # 4. 刪除資料庫中不在 current_tender_keys 的標案（已結束/過期）
+    logger.info("\n檢查需要清理的標案...")
+    deleted_count = 0
 
-    # 統計最終結果
-    final_count = count_active_tenders()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT unit_id, job_number, brief FROM tenders")
+            all_db_tenders = cursor.fetchall()
 
-    logger.info("\n" + "="*60)
-    logger.info("初始化完成")
-    logger.info(f"資料庫目前有 {final_count} 筆活躍標案")
-    logger.info(f"本次新增：{len(new_tenders)} 筆")
-    logger.info("="*60)
+            for unit_id, job_number, brief in all_db_tenders:
+                if (unit_id, job_number) not in current_tender_keys:
+                    cursor.execute(
+                        "DELETE FROM tenders WHERE unit_id = ? AND job_number = ?",
+                        (unit_id, job_number)
+                    )
+                    deleted_count += 1
+                    logger.info(f"  刪除: {brief[:40]}...")
 
-    # 發送 LINE 通知
-    if LINE_CHANNEL_ACCESS_TOKEN and LINE_USER_ID and new_tenders:
-        message = f"""📊 標案監控系統初始化完成
+            conn.commit()
+    except Exception as e:
+        logger.error(f"清理標案失敗: {e}")
 
-✨ 新增標案：{len(new_tenders)} 筆
-📌 目前追蹤：{final_count} 筆活躍標案
-
-系統已就緒，開始監控！
-"""
-        send_line_message(message)
-
-
-def monitor_mode():
-    """
-    日常監控模式（每 2 小時執行）
-
-    - 查詢最近 1 天新標案
-    - 檢查所有活躍標案狀態
-    - 歸檔已結束標案
-    - 發送 LINE 通知（僅新案）
-    """
-    logger.info("="*60)
-    logger.info("執行模式：日常監控")
-    logger.info("="*60)
-
-    # 1. 歸檔已結束的標案
-    logger.info("\n檢查需要歸檔的標案...")
-    archived = archive_ended_tenders()
-
-    # 2. 查詢最近 1 天新標案
-    logger.info("\n查詢最近 1 天新標案...")
-    all_candidates = fetch_tenders_by_date_range(days_to_search=1)
-
-    if not all_candidates:
-        logger.info("未找到符合條件的標案")
-        new_tenders = []
-    else:
-        # 過濾出真正的新標案
-        candidates = []
-        for tender in all_candidates:
-            if is_new_tender(tender['unit_id'], tender['job_number']):
-                candidates.append(tender)
-
-        if not candidates:
-            logger.info("無新標案")
-            new_tenders = []
-        else:
-            logger.info(f"發現 {len(candidates)} 筆候選新標案，開始查詢詳細資料...")
-
-            # 查詢詳細資料並儲存
-            new_tenders = []
-            for idx, tender in enumerate(candidates, 1):
-                logger.info(f"  [{idx}/{len(candidates)}] 查詢: {tender['brief'][:50]}...")
-
-                # 查詢詳細資料取得預算和截止日期
-                result = get_tender_detail(tender['unit_id'], tender['job_number'])
-
-                if result is None:
-                    logger.warning(f"    無法取得完整資訊，跳過")
-                    continue
-
-                budget, pk_pms_main, deadline = result
-
-                # 預算過濾
-                if not (MIN_BUDGET <= budget <= MAX_BUDGET):
-                    logger.debug(f"    預算不符 (${budget:,})")
-                    continue
-
-                # 截止日期檢查
-                try:
-                    deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M:%S")
-                    if deadline_dt < datetime.now():
-                        logger.debug(f"    已截止")
-                        continue
-                except:
-                    logger.debug(f"    截止日期格式錯誤")
-                    continue
-
-                logger.info(f"    ✓ 符合條件! 預算: ${budget:,}, 截止: {deadline}")
-
-                # 儲存新標案
-                if save_tender(
-                    unit_id=tender['unit_id'],
-                    job_number=tender['job_number'],
-                    brief=tender['brief'],
-                    unit_name=tender.get('unit_name', ''),
-                    budget=budget,
-                    pk_pms_main=pk_pms_main,
-                    deadline=deadline
-                ):
-                    new_tenders.append({
-                        'brief': tender['brief'],
-                        'unit': tender.get('unit_name', ''),
-                        'budget': budget,
-                        'deadline': deadline,
-                        'pk_pms_main': pk_pms_main
-                    })
-
-            logger.info(f"成功儲存 {len(new_tenders)} 筆新標案")
-
-    # 3. 統計結果
+    # 5. 統計結果
     active_count = count_active_tenders()
 
     logger.info("\n" + "="*60)
-    logger.info("監控完成")
+    logger.info("同步完成")
     logger.info(f"新增標案：{len(new_tenders)} 筆")
-    logger.info(f"歸檔標案：{len(archived)} 筆")
+    logger.info(f"刪除標案：{deleted_count} 筆")
     logger.info(f"目前追蹤：{active_count} 筆活躍標案")
     logger.info("="*60)
 
-    # 4. 發送 LINE 通知（僅新標案）
-    if LINE_CHANNEL_ACCESS_TOKEN and LINE_USER_ID and new_tenders:
-        # 使用現有的格式化函數
+    # 6. 發送通知（僅新案）
+    if new_tenders and LINE_CHANNEL_ACCESS_TOKEN and LINE_USER_ID:
         message = format_line_notification(
-            mode='monitor',
+            mode='sync',
             new_tenders=new_tenders
         )
         send_line_message(message)
@@ -1241,9 +1063,9 @@ def main():
     parser = argparse.ArgumentParser(description='政府採購網軟體標案監控')
     parser.add_argument(
         '--mode',
-        choices=['init', 'monitor', 'report'],
-        default='monitor',
-        help='執行模式: init(初始化), monitor(日常監控), report(日報生成)'
+        choices=['sync', 'report'],
+        default='sync',
+        help='執行模式: sync(同步資料), report(生成日報)'
     )
 
     args = parser.parse_args()
@@ -1252,10 +1074,8 @@ def main():
     init_db()
 
     # 根據模式執行對應功能
-    if args.mode == 'init':
-        init_mode()
-    elif args.mode == 'monitor':
-        monitor_mode()
+    if args.mode == 'sync':
+        sync_mode()
     elif args.mode == 'report':
         report_mode()
     else:
