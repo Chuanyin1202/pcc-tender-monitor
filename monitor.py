@@ -161,6 +161,13 @@ def init_db():
             """)
 
             # 升級現有資料庫：增加新欄位
+            # 處理舊版本沒有 url 欄位的問題
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN url TEXT")
+                logger.info("資料庫升級：新增 url 欄位")
+            except sqlite3.OperationalError:
+                pass  # 欄位已存在
+
             try:
                 cursor.execute("ALTER TABLE tenders ADD COLUMN status TEXT")
                 logger.info("資料庫升級：新增 status 欄位")
