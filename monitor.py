@@ -185,6 +185,37 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
+            # 新增決策關鍵欄位
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN award_type TEXT")
+                logger.info("資料庫升級：新增 award_type 欄位")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN is_electronic INTEGER DEFAULT 0")
+                logger.info("資料庫升級：新增 is_electronic 欄位")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN requires_deposit INTEGER DEFAULT 0")
+                logger.info("資料庫升級：新增 requires_deposit 欄位")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN contract_duration TEXT")
+                logger.info("資料庫升級：新增 contract_duration 欄位")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE tenders ADD COLUMN qualification_summary TEXT")
+                logger.info("資料庫升級：新增 qualification_summary 欄位")
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
             logger.debug("資料庫初始化成功")
     except sqlite3.Error as e:
@@ -209,7 +240,8 @@ def is_new_tender(unit_id, job_number):
         return True
 
 
-def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url):
+def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url,
+                 award_type='', is_electronic=0, requires_deposit=0, contract_duration='', qualification_summary=''):
     """儲存標案到資料庫，返回是否成功"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -217,9 +249,11 @@ def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, dead
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.execute("""
-                INSERT INTO tenders (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, date_added)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, now))
+                INSERT INTO tenders (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, date_added,
+                                     award_type, is_electronic, requires_deposit, contract_duration, qualification_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, now,
+                  award_type, is_electronic, requires_deposit, contract_duration, qualification_summary))
 
             conn.commit()
             logger.debug(f"標案已儲存: {brief[:40]}...")
@@ -474,7 +508,7 @@ def parse_roc_date(roc_date_str):
 
 
 def get_tender_detail(unit_id, job_number):
-    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline, url)"""
+    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary)"""
     try:
         # 加入延遲避免 rate limiting
         time.sleep(API_DELAY)
@@ -500,16 +534,31 @@ def get_tender_detail(unit_id, job_number):
                 selected_record = max(records, key=lambda r: r.get('date', 0))
 
             detail = selected_record.get('detail', {})
+
+            # 基本資訊
             budget_str = detail.get('採購資料:預算金額', '')
             pk_pms_main = detail.get('pkPmsMain', '')
             deadline_str = detail.get('領投開標:截止投標', '')
             tender_url = detail.get('url', '')
 
+            # 新增：決策關鍵資訊
+            award_type = detail.get('領投開標:決標方式', '')
+            is_electronic_str = detail.get('領投開標:是否', '')  # 電子投標
+            is_electronic = 1 if '是' in is_electronic_str else 0
+
+            deposit_str = detail.get('領投開標:押標金', '')
+            requires_deposit = 0 if '免' in deposit_str or '否' in deposit_str or not deposit_str else 1
+
+            contract_duration = detail.get('履約資訊:履約期限', '')
+            qualification = detail.get('投標廠商資格', '')
+            # 截取資格限制前150字作為摘要
+            qualification_summary = qualification[:150] if qualification else ''
+
             budget = parse_budget(budget_str)
             deadline = parse_roc_date(deadline_str)
 
             if budget and deadline:
-                return (budget, pk_pms_main, deadline, tender_url)
+                return (budget, pk_pms_main, deadline, tender_url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary)
 
         return None
 
@@ -837,7 +886,7 @@ def sync_mode():
                 logger.warning(f"    無法取得完整資訊，跳過")
                 continue
 
-            budget, pk_pms_main, deadline, url = result
+            budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary = result
 
             # 預算過濾
             if not (MIN_BUDGET <= budget <= MAX_BUDGET):
@@ -865,7 +914,12 @@ def sync_mode():
                 budget=budget,
                 pk_pms_main=pk_pms_main,
                 deadline=deadline,
-                url=url
+                url=url,
+                award_type=award_type,
+                is_electronic=is_electronic,
+                requires_deposit=requires_deposit,
+                contract_duration=contract_duration,
+                qualification_summary=qualification_summary
             ):
                 new_tenders.append({
                     'brief': tender['brief'],
@@ -873,7 +927,12 @@ def sync_mode():
                     'budget': budget,
                     'deadline': deadline,
                     'pk_pms_main': pk_pms_main,
-                    'url': url
+                    'url': url,
+                    'award_type': award_type,
+                    'is_electronic': is_electronic,
+                    'requires_deposit': requires_deposit,
+                    'contract_duration': contract_duration,
+                    'qualification_summary': qualification_summary
                 })
 
     # 4. 刪除資料庫中不在 current_tender_keys 的標案（已結束/過期）
@@ -943,13 +1002,24 @@ def report_mode():
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT brief, budget, deadline, unit_name
+                SELECT brief, budget, deadline, unit_name, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary
                 FROM tenders
                 WHERE date(date_added) = date('now')
                 ORDER BY budget DESC
             """)
             new_today = [
-                {'brief': row[0], 'budget': row[1], 'deadline': row[2], 'unit': row[3]}
+                {
+                    'brief': row[0],
+                    'budget': row[1],
+                    'deadline': row[2],
+                    'unit': row[3],
+                    'url': row[4],
+                    'award_type': row[5] or '',
+                    'is_electronic': row[6] or 0,
+                    'requires_deposit': row[7] or 0,
+                    'contract_duration': row[8] or '',
+                    'qualification_summary': row[9] or ''
+                }
                 for row in cursor.fetchall()
             ]
     except Exception as e:
@@ -997,20 +1067,105 @@ def report_mode():
 
 """
 
-    # 新增標案
+    # 新增標案：分類呈現
     if new_today:
-        report += "## ✨ 今日新增標案\n\n"
-        report += "| 標案名稱 | 預算 | 截止日期 | 機關 |\n"
-        report += "|---------|------|----------|------|\n"
+        # 分類標案
+        high_priority = []  # 最有利標 + 預算 > 100萬
+        worth_attention = []  # 最低標 + 免押標金 + 電子投標
+        others = []
 
         for tender in new_today:
-            brief = tender['brief'][:50] + '...' if len(tender['brief']) > 50 else tender['brief']
-            budget = f"${tender['budget']:,}"
-            deadline = tender['deadline'][:10] if tender.get('deadline') else 'N/A'
-            unit = tender['unit'][:20] if tender.get('unit') else 'N/A'
-            report += f"| {brief} | {budget} | {deadline} | {unit} |\n"
+            is_advantageous = '最有利標' in tender.get('award_type', '')
+            is_high_budget = tender.get('budget', 0) >= 1000000
+            is_lowest = '最低標' in tender.get('award_type', '')
+            no_deposit = tender.get('requires_deposit', 1) == 0
+            is_electronic = tender.get('is_electronic', 0) == 1
 
-        report += "\n"
+            if is_advantageous and is_high_budget:
+                high_priority.append(tender)
+            elif is_lowest and no_deposit and is_electronic:
+                worth_attention.append(tender)
+            else:
+                others.append(tender)
+
+        # 高優先級標案
+        if high_priority:
+            report += "## 🔥 高優先級標案（最有利標 + 預算 > 100萬）\n\n"
+            for idx, tender in enumerate(high_priority, 1):
+                report += f"### {idx}. {tender['brief']}\n\n"
+                report += "**📊 基本資訊**\n"
+                report += f"- 💰 預算：${tender['budget']:,}\n"
+
+                # 計算剩餘天數
+                try:
+                    deadline_dt = datetime.strptime(tender['deadline'], "%Y-%m-%d %H:%M:%S")
+                    days_left = (deadline_dt - datetime.now()).days
+                    days_tag = f"剩 {days_left} 天" if days_left > 0 else "⚠️ 即將截止"
+                except:
+                    days_tag = ""
+
+                report += f"- ⏰ 截止：{tender['deadline'][:16]}（{days_tag}）\n"
+                report += f"- 🏢 機關：{tender['unit']}\n"
+                report += f"- 🔗 [查看詳情]({tender['url']})\n\n"
+
+                report += "**🎯 投標條件**\n"
+                report += f"- 決標方式：🏆 {tender['award_type']}\n"
+                report += f"- 電子投標：{'💻 支援' if tender['is_electronic'] else '❌ 不支援'}\n"
+                report += f"- 押標金：{'✅ 免繳納' if not tender['requires_deposit'] else '⚠️ 需繳納'}\n"
+                report += f"- 履約期限：{tender['contract_duration'] or '未提供'}\n\n"
+
+                if tender['qualification_summary']:
+                    report += "**📋 資格要求**\n"
+                    report += f"{tender['qualification_summary']}\n\n"
+
+                report += "---\n\n"
+
+        # 值得關注的標案
+        if worth_attention:
+            report += "## ⚡ 值得關注（最低標 + 免押標金 + 電子投標）\n\n"
+            for idx, tender in enumerate(worth_attention, 1):
+                report += f"### {idx}. {tender['brief']}\n\n"
+                report += "**📊 基本資訊**\n"
+                report += f"- 💰 預算：${tender['budget']:,}\n"
+
+                try:
+                    deadline_dt = datetime.strptime(tender['deadline'], "%Y-%m-%d %H:%M:%S")
+                    days_left = (deadline_dt - datetime.now()).days
+                    days_tag = f"剩 {days_left} 天" if days_left > 0 else "⚠️ 即將截止"
+                except:
+                    days_tag = ""
+
+                report += f"- ⏰ 截止：{tender['deadline'][:16]}（{days_tag}）\n"
+                report += f"- 🏢 機關：{tender['unit']}\n"
+                report += f"- 🔗 [查看詳情]({tender['url']})\n\n"
+
+                report += "**🎯 投標條件**\n"
+                report += f"- 決標方式：💸 {tender['award_type']}\n"
+                report += f"- 電子投標：{'💻 支援' if tender['is_electronic'] else '❌ 不支援'}\n"
+                report += f"- 押標金：{'✅ 免繳納' if not tender['requires_deposit'] else '⚠️ 需繳納'}\n"
+                report += f"- 履約期限：{tender['contract_duration'] or '未提供'}\n\n"
+
+                if tender['qualification_summary']:
+                    report += "**📋 資格要求**\n"
+                    report += f"{tender['qualification_summary']}\n\n"
+
+                report += "---\n\n"
+
+        # 其他標案
+        if others:
+            report += "## 📌 其他標案\n\n"
+            report += "| 標案名稱 | 預算 | 決標方式 | 截止日期 | 連結 |\n"
+            report += "|---------|------|----------|----------|------|\n"
+
+            for tender in others:
+                brief = tender['brief'][:60] + '...' if len(tender['brief']) > 60 else tender['brief']
+                budget = f"${tender['budget']:,}"
+                award_type = tender.get('award_type', 'N/A')
+                deadline = tender['deadline'][:10] if tender.get('deadline') else 'N/A'
+                link = f"[查看]({tender['url']})" if tender.get('url') else 'N/A'
+                report += f"| {brief} | {budget} | {award_type} | {deadline} | {link} |\n"
+
+            report += "\n"
     else:
         report += "## ✨ 今日新增標案\n\n無新增標案。\n\n"
 
