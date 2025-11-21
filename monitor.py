@@ -127,6 +127,7 @@ def init_db():
                     budget INTEGER,
                     pk_pms_main TEXT,
                     deadline TEXT,
+                    url TEXT,
                     date_added TEXT,
                     notified INTEGER DEFAULT 0,
                     status TEXT,
@@ -208,7 +209,7 @@ def is_new_tender(unit_id, job_number):
         return True
 
 
-def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline):
+def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url):
     """儲存標案到資料庫，返回是否成功"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -216,9 +217,9 @@ def save_tender(unit_id, job_number, brief, unit_name, budget, pk_pms_main, dead
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.execute("""
-                INSERT INTO tenders (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, date_added)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, now))
+                INSERT INTO tenders (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, date_added)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline, url, now))
 
             conn.commit()
             logger.debug(f"標案已儲存: {brief[:40]}...")
@@ -291,7 +292,7 @@ def format_line_notification(mode, new_tenders, status_changes=None, report_url=
         message += "🔥 重點標案 (預算 > 80萬)\n\n"
 
         for i, case in enumerate(high_priority[:3], 1):  # 最多顯示 3 筆
-            detail_url = f"https://web.pcc.gov.tw/tps/pss/tender.do?searchMode=common&searchType=advance&pkPmsMain={case['pk_pms_main']}"
+            detail_url = case.get('url', '#')
 
             # 截取標題（最多 40 字）
             title = case['brief'][:40] + '...' if len(case['brief']) > 40 else case['brief']
@@ -473,7 +474,7 @@ def parse_roc_date(roc_date_str):
 
 
 def get_tender_detail(unit_id, job_number):
-    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline)"""
+    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline, url)"""
     try:
         # 加入延遲避免 rate limiting
         time.sleep(API_DELAY)
@@ -502,12 +503,13 @@ def get_tender_detail(unit_id, job_number):
             budget_str = detail.get('採購資料:預算金額', '')
             pk_pms_main = detail.get('pkPmsMain', '')
             deadline_str = detail.get('領投開標:截止投標', '')
+            tender_url = detail.get('url', '')
 
             budget = parse_budget(budget_str)
             deadline = parse_roc_date(deadline_str)
 
             if budget and deadline:
-                return (budget, pk_pms_main, deadline)
+                return (budget, pk_pms_main, deadline, tender_url)
 
         return None
 
@@ -835,7 +837,7 @@ def sync_mode():
                 logger.warning(f"    無法取得完整資訊，跳過")
                 continue
 
-            budget, pk_pms_main, deadline = result
+            budget, pk_pms_main, deadline, url = result
 
             # 預算過濾
             if not (MIN_BUDGET <= budget <= MAX_BUDGET):
@@ -862,14 +864,16 @@ def sync_mode():
                 unit_name=tender.get('unit_name', ''),
                 budget=budget,
                 pk_pms_main=pk_pms_main,
-                deadline=deadline
+                deadline=deadline,
+                url=url
             ):
                 new_tenders.append({
                     'brief': tender['brief'],
                     'unit': tender.get('unit_name', ''),
                     'budget': budget,
                     'deadline': deadline,
-                    'pk_pms_main': pk_pms_main
+                    'pk_pms_main': pk_pms_main,
+                    'url': url
                 })
 
     # 4. 刪除資料庫中不在 current_tender_keys 的標案（已結束/過期）
