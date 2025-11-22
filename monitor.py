@@ -1042,15 +1042,15 @@ def report_mode():
 
     today = datetime.now().strftime('%Y-%m-%d')
 
-    # 1. 查詢當天新增的標案（date_added = today）
-    logger.info("\n查詢今日新增標案...")
+    # 1. 查詢所有活躍標案（未截止）
+    logger.info("\n查詢所有活躍標案...")
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT brief, budget, deadline, unit_name, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary
                 FROM tenders
-                WHERE date(date_added) = date('now')
+                WHERE datetime(deadline) > datetime('now')
                 ORDER BY budget DESC
             """)
             new_today = [
@@ -1069,8 +1069,18 @@ def report_mode():
                 for row in cursor.fetchall()
             ]
     except Exception as e:
-        logger.error(f"查詢今日新增標案失敗: {e}")
+        logger.error(f"查詢活躍標案失敗: {e}")
         new_today = []
+
+    # 1.5. 單獨統計今日新增數量（用於統計摘要）
+    new_today_count = 0
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM tenders WHERE date(date_added) = date('now')")
+            new_today_count = cursor.fetchone()[0]
+    except Exception as e:
+        logger.error(f"統計今日新增標案失敗: {e}")
 
     # 2. 查詢當天歸檔的標案（archived_at = today）
     logger.info("查詢今日歸檔標案...")
@@ -1105,7 +1115,7 @@ def report_mode():
 
 ## 📊 統計摘要
 
-- ✨ 今日新增：**{len(new_today)}** 筆
+- ✨ 今日新增：**{new_today_count}** 筆
 - 🔄 今日移除：**{len(archived_today)}** 筆
 - 📌 目前追蹤：**{active_count}** 筆活躍標案
 
