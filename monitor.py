@@ -515,7 +515,7 @@ def parse_roc_date(roc_date_str):
 
 
 def get_tender_detail(unit_id, job_number):
-    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary)"""
+    """查詢單一標案的詳細資料，回傳 (budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name)"""
     try:
         # 加入延遲避免 rate limiting
         time.sleep(API_DELAY)
@@ -561,11 +561,14 @@ def get_tender_detail(unit_id, job_number):
             # 截取資格限制前150字作為摘要
             qualification_summary = qualification[:150] if qualification else ''
 
+            # 機關名稱
+            unit_name = detail.get('機關資料:機關名稱', '')
+
             budget = parse_budget(budget_str)
             deadline = parse_roc_date(deadline_str)
 
             if budget and deadline:
-                return (budget, pk_pms_main, deadline, tender_url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary)
+                return (budget, pk_pms_main, deadline, tender_url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name)
 
         return None
 
@@ -697,7 +700,7 @@ def fetch_tenders(mode='quick'):
                 logger.warning(f"    無法取得完整資訊,跳過")
                 continue
 
-            budget, pk_pms_main, deadline = result
+            budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name = result
 
             # 預算過濾
             if not (MIN_BUDGET <= budget <= MAX_BUDGET):
@@ -862,9 +865,9 @@ def sync_mode():
     logger.info("執行模式：資料同步")
     logger.info("="*60)
 
-    # 1. 重新抓取 14 天資料
-    logger.info("\n開始掃描最近 14 天標案...")
-    all_candidates = fetch_tenders_by_date_range(days_to_search=14)
+    # 1. 重新抓取 3 天資料
+    logger.info("\n開始掃描最近 3 天標案...")
+    all_candidates = fetch_tenders_by_date_range(days_to_search=3)
 
     if not all_candidates:
         logger.info("未找到符合條件的標案")
@@ -872,11 +875,50 @@ def sync_mode():
 
     logger.info(f"掃描完成，找到 {len(all_candidates)} 筆符合條件的標案")
 
-    # 2. 建立「當前應該存在」的標案集合
+    # 2. 回填缺少 URL 或 unit_name 的標案
+    logger.info("\n檢查並回填缺少 URL 或機關名稱的標案...")
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT unit_id, job_number, brief
+                FROM tenders
+                WHERE (url IS NULL OR url = '') OR (unit_name IS NULL OR unit_name = '')
+            """)
+            missing_data_tenders = cursor.fetchall()
+
+        if missing_data_tenders:
+            logger.info(f"發現 {len(missing_data_tenders)} 筆缺少資料的標案，開始回填...")
+            success_count = 0
+            for unit_id, job_number, brief in missing_data_tenders[:50]:  # 限制一次最多回填 50 筆
+                try:
+                    result = get_tender_detail(unit_id, job_number)
+                    if result:
+                        budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name = result
+                        with sqlite3.connect(DB_PATH) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                UPDATE tenders
+                                SET url = ?, unit_name = ?
+                                WHERE unit_id = ? AND job_number = ?
+                            """, (url, unit_name, unit_id, job_number))
+                            conn.commit()
+                        success_count += 1
+                        logger.debug(f"    回填成功: {brief[:30]}... (URL: {'有' if url else '無'}, 機關: {unit_name[:20] if unit_name else '無'}...)")
+                except Exception as e:
+                    logger.error(f"回填失敗 ({brief[:30]}...): {e}")
+                    continue
+            logger.info(f"資料回填完成：{success_count}/{len(missing_data_tenders[:50])} 筆")
+        else:
+            logger.info("所有標案的 URL 和機關名稱都完整")
+    except Exception as e:
+        logger.error(f"資料回填過程失敗: {e}")
+
+    # 3. 建立「當前應該存在」的標案集合
     current_tender_keys = set()
     new_tenders = []  # 用於通知
 
-    # 3. 處理每個候選標案
+    # 4. 處理每個候選標案
     logger.info("\n處理候選標案...")
     for idx, tender in enumerate(all_candidates, 1):
         key = (tender['unit_id'], tender['job_number'])
@@ -893,7 +935,7 @@ def sync_mode():
                 logger.warning(f"    無法取得完整資訊，跳過")
                 continue
 
-            budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary = result
+            budget, pk_pms_main, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name = result
 
             # 預算過濾
             if not (MIN_BUDGET <= budget <= MAX_BUDGET):
@@ -917,7 +959,7 @@ def sync_mode():
                 unit_id=tender['unit_id'],
                 job_number=tender['job_number'],
                 brief=tender['brief'],
-                unit_name=tender.get('unit_name', ''),
+                unit_name=unit_name or tender.get('unit_name', ''),  # 優先使用 API 取得的機關名稱
                 budget=budget,
                 pk_pms_main=pk_pms_main,
                 deadline=deadline,
@@ -930,7 +972,7 @@ def sync_mode():
             ):
                 new_tenders.append({
                     'brief': tender['brief'],
-                    'unit': tender.get('unit_name', ''),
+                    'unit': unit_name or tender.get('unit_name', ''),  # 優先使用 API 取得的機關名稱
                     'budget': budget,
                     'deadline': deadline,
                     'pk_pms_main': pk_pms_main,

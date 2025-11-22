@@ -2,6 +2,7 @@
 """
 回填腳本：為現有標案補充詳細資訊
 - url
+- unit_name（機關名稱）
 - award_type（決標方式）
 - is_electronic（電子投標）
 - requires_deposit（押標金）
@@ -39,6 +40,7 @@ def backfill_tender_details(limit=None):
             SELECT unit_id, job_number, brief, pk_pms_main
             FROM tenders
             WHERE (url IS NULL OR url = '')
+               OR (unit_name IS NULL OR unit_name = '')
                OR (award_type IS NULL OR award_type = '')
             ORDER BY budget DESC
         """
@@ -67,7 +69,7 @@ def backfill_tender_details(limit=None):
             result = get_tender_detail(unit_id, job_number)
 
             if result:
-                budget, pk_pms_main_new, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary = result
+                budget, pk_pms_main_new, deadline, url, award_type, is_electronic, requires_deposit, contract_duration, qualification_summary, unit_name = result
 
                 # 更新資料庫
                 with sqlite3.connect(DB_PATH) as conn:
@@ -75,18 +77,19 @@ def backfill_tender_details(limit=None):
                     cursor.execute("""
                         UPDATE tenders
                         SET url = ?,
+                            unit_name = ?,
                             award_type = ?,
                             is_electronic = ?,
                             requires_deposit = ?,
                             contract_duration = ?,
                             qualification_summary = ?
                         WHERE unit_id = ? AND job_number = ?
-                    """, (url, award_type, is_electronic, requires_deposit,
+                    """, (url, unit_name, award_type, is_electronic, requires_deposit,
                           contract_duration, qualification_summary, unit_id, job_number))
                     conn.commit()
 
                 success_count += 1
-                logger.info(f"  ✓ 更新成功 - 決標方式: {award_type or 'N/A'}")
+                logger.info(f"  ✓ 更新成功 - 機關: {unit_name[:20] if unit_name else 'N/A'}..., 決標方式: {award_type or 'N/A'}")
             else:
                 failed_count += 1
                 logger.warning(f"  ✗ 無法取得詳細資訊")
