@@ -76,12 +76,37 @@ HEADERS = {
 MIN_BUDGET = 150000
 MAX_BUDGET = 1500000
 
-# 搜尋關鍵字（使用 listbydate API,本地端過濾）
-SEARCH_KEYWORDS = ["軟體", "APP", "網站", "應用程式", "系統", "資訊", "開發", "建置"]
+# 搜尋關鍵字配置（兩階段過濾）
+# 優先關鍵字：高精準度，直接通過（但仍需檢查硬體排除）
+MUST_INCLUDE_KEYWORDS = ["軟體", "APP", "網站", "應用程式", "平台", "程式"]
+
+# 次級關鍵字：需要額外驗證，不能有硬體特徵
+SYSTEM_KEYWORDS = ["系統", "資訊", "開發", "建置"]
+
+# 合併為完整搜尋關鍵字列表（用於 API 查詢）
+SEARCH_KEYWORDS = MUST_INCLUDE_KEYWORDS + SYSTEM_KEYWORDS
 
 # 執行模式配置
 QUICK_MODE_DAYS = 2    # 快速模式：查詢最近 2 天
 DEEP_MODE_DAYS = 14    # 深度模式：查詢最近 14 天
+
+# 硬體/設備強制排除（優先級最高）
+HARD_EXCLUDE = [
+    # 硬體採購特徵
+    "一批", "一台", "一組", "零配件", "備品",
+    # 醫療器材
+    "試劑", "衛材", "醫療器材", "耗材",
+    # 設備採購
+    "設備更新", "設備汰換", "設備採購", "儀器設備",
+    # 機電設備
+    "鍋爐", "蒸汽", "熱水", "蒸汽系統", "熱泵",
+    # 水電工程
+    "給水系統", "排水系統", "管路系統", "海水", "偵漏系統",
+    # 空調/溫控
+    "冷氣", "空調", "冰水主機", "溫控",
+    # 基因/生化設備
+    "基因分析系統", "DNA", "RNA", "PCR",
+]
 
 # 排除關鍵字（本地端二次過濾）
 KEYWORDS_EXCLUDE = [
@@ -628,11 +653,25 @@ def fetch_tenders_by_date_range(days_to_search):
                 title = brief_data.get('title', '')
                 tender_type = brief_data.get('type', '')
 
-                # 檢查包含關鍵字
-                if any(kw in title for kw in SEARCH_KEYWORDS):
-                    # 檢查排除關鍵字
+                # 兩階段過濾邏輯
+                # 階段 1: 優先檢查硬體排除（最高優先級）
+                if any(hard_ex in title for hard_ex in HARD_EXCLUDE):
+                    continue  # 直接跳過硬體/設備採購
+
+                # 階段 2: 檢查是否包含必要關鍵字
+                has_must_include = any(kw in title for kw in MUST_INCLUDE_KEYWORDS)
+                has_system_keyword = any(kw in title for kw in SYSTEM_KEYWORDS)
+
+                if has_must_include:
+                    # 優先關鍵字：直接通過（已過硬體排除）
+                    record['brief'] = title
+                    record['publish_date'] = target_date.strftime('%Y-%m-%d')
+                    record['status'] = tender_type
+                    all_candidates.append(record)
+                    matched += 1
+                elif has_system_keyword:
+                    # 次級關鍵字：需要額外檢查排除列表
                     if not any(ex_kw in title for ex_kw in KEYWORDS_EXCLUDE):
-                        # 標準化資料結構：brief 改為字串
                         record['brief'] = title
                         record['publish_date'] = target_date.strftime('%Y-%m-%d')
                         record['status'] = tender_type
