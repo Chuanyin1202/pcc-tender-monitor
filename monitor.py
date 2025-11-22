@@ -865,9 +865,9 @@ def sync_mode():
     logger.info("執行模式：資料同步")
     logger.info("="*60)
 
-    # 1. 重新抓取 3 天資料
-    logger.info("\n開始掃描最近 3 天標案...")
-    all_candidates = fetch_tenders_by_date_range(days_to_search=3)
+    # 1. 重新抓取 14 天資料
+    logger.info("\n開始掃描最近 14 天標案...")
+    all_candidates = fetch_tenders_by_date_range(days_to_search=14)
 
     if not all_candidates:
         logger.info("未找到符合條件的標案")
