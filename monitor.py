@@ -890,7 +890,7 @@ def sync_mode():
         if missing_data_tenders:
             logger.info(f"發現 {len(missing_data_tenders)} 筆缺少資料的標案，開始回填...")
             success_count = 0
-            for unit_id, job_number, brief in missing_data_tenders[:50]:  # 限制一次最多回填 50 筆
+            for unit_id, job_number, brief in missing_data_tenders:
                 try:
                     result = get_tender_detail(unit_id, job_number)
                     if result:
@@ -908,7 +908,7 @@ def sync_mode():
                 except Exception as e:
                     logger.error(f"回填失敗 ({brief[:30]}...): {e}")
                     continue
-            logger.info(f"資料回填完成：{success_count}/{len(missing_data_tenders[:50])} 筆")
+            logger.info(f"資料回填完成：{success_count}/{len(missing_data_tenders)} 筆")
         else:
             logger.info("所有標案的 URL 和機關名稱都完整")
     except Exception as e:
