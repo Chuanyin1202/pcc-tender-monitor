@@ -13,6 +13,7 @@ import csv
 import requests
 import time
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -41,7 +42,7 @@ logger.addHandler(console_handler)
 # ===== 配置 =====
 
 DB_PATH = "tenders.db"
-API_BASE_URL = "https://pcc-api.openfun.app/api"
+API_BASE_URL = os.getenv("PCC_API_BASE_URL", "https://morning-pine-2053.alexabc.workers.dev/api")
 API_TIMEOUT = 15
 
 

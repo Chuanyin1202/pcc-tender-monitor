@@ -56,7 +56,7 @@ logger.addHandler(console_handler)
 # ===== 配置區 =====
 
 # 使用 Cloudflare Workers 反向代理（解決 GitHub Actions IP 封鎖問題）
-API_BASE_URL = "https://morning-pine-2053.alexabc.workers.dev/api"
+API_BASE_URL = os.getenv("PCC_API_BASE_URL", "https://morning-pine-2053.alexabc.workers.dev/api")
 
 # API 請求 Headers（使用完整瀏覽器 headers 避免被阻擋）
 HEADERS = {
@@ -1076,11 +1076,30 @@ def sync_mode():
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT unit_id, job_number, brief FROM tenders")
+            cursor.execute("""
+                SELECT unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline,
+                       date_added, notified, status, publish_date, last_checked, last_status_change
+                FROM tenders
+            """)
             all_db_tenders = cursor.fetchall()
 
-            for unit_id, job_number, brief in all_db_tenders:
+            for row in all_db_tenders:
+                (unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline,
+                 date_added, notified, status, publish_date, last_checked, last_status_change) = row
                 if (unit_id, job_number) not in current_tender_keys:
+                    archived_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    archive_reason = "not_in_current_scan"
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO tenders_archive (
+                            unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline,
+                            date_added, notified, status, publish_date, last_checked, last_status_change,
+                            archived_at, archive_reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        unit_id, job_number, brief, unit_name, budget, pk_pms_main, deadline,
+                        date_added, notified, status, publish_date, last_checked, last_status_change,
+                        archived_at, archive_reason
+                    ))
                     cursor.execute(
                         "DELETE FROM tenders WHERE unit_id = ? AND job_number = ?",
                         (unit_id, job_number)
