@@ -17,6 +17,8 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from pcc_api import pcc_get
+
 # ===== 日誌系統設定 =====
 
 # 建立 logs 目錄
@@ -42,7 +44,6 @@ logger.addHandler(console_handler)
 # ===== 配置 =====
 
 DB_PATH = "tenders.db"
-API_BASE_URL = os.getenv("PCC_API_BASE_URL", "https://morning-pine-2053.alexabc.workers.dev/api")
 API_TIMEOUT = 15
 
 
@@ -51,10 +52,9 @@ def get_tender_full_detail(unit_id, job_number):
     try:
         time.sleep(0.3)  # 避免 rate limiting
 
-        url = f"{API_BASE_URL}/tender"
         params = {'unit_id': unit_id, 'job_number': job_number}
 
-        response = requests.get(url, params=params, timeout=API_TIMEOUT)
+        response = pcc_get('tender', params, API_TIMEOUT)
         response.raise_for_status()
 
         data = response.json()

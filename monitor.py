@@ -19,6 +19,8 @@ import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from pcc_api import pcc_get
+
 # ===== 日誌系統設定 =====
 
 # 建立 logs 目錄
@@ -54,9 +56,6 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # ===== 配置區 =====
-
-# 使用 Cloudflare Workers 反向代理（解決 GitHub Actions IP 封鎖問題）
-API_BASE_URL = os.getenv("PCC_API_BASE_URL", "https://morning-pine-2053.alexabc.workers.dev/api")
 
 # API 請求 Headers（使用完整瀏覽器 headers 避免被阻擋）
 HEADERS = {
@@ -591,10 +590,9 @@ def get_tender_detail(unit_id, job_number):
         # 加入延遲避免 rate limiting
         time.sleep(API_DELAY)
 
-        url = f"{API_BASE_URL}/tender"
         params = {'unit_id': unit_id, 'job_number': job_number}
 
-        response = requests.get(url, params=params, headers=HEADERS, timeout=API_TIMEOUT)
+        response = pcc_get('tender', params, API_TIMEOUT)
         response.raise_for_status()
 
         data = response.json()
@@ -680,11 +678,10 @@ def fetch_tenders_by_date_range(days_to_search):
 
         logger.info(f"\n查詢日期: {target_date.strftime('%Y-%m-%d')}")
 
-        url = f"{API_BASE_URL}/listbydate"
         params = {'date': date_str}
 
         try:
-            response = requests.get(url, params=params, headers=HEADERS, timeout=API_TIMEOUT)
+            response = pcc_get('listbydate', params, API_TIMEOUT)
             response.raise_for_status()
 
             data = response.json()
