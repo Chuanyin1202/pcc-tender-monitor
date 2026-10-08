@@ -173,8 +173,8 @@ LINE_USER_ID = os.getenv("LINE_USER_ID", "")
 # 資料庫路徑
 DB_PATH = "tenders.db"
 
-# API 請求間隔（秒）
-API_DELAY = 0.5
+# API 請求間隔（秒），過短會被 API 限流（429）
+API_DELAY = 2.0
 
 # API 超時設定（秒）
 API_TIMEOUT = 15  # 從 30 秒改為 15 秒
@@ -643,9 +643,8 @@ def get_tender_detail(unit_id, job_number):
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 429:
-            logger.warning(f"API 請求過於頻繁，等待後重試...")
-            time.sleep(3)  # 等待 3 秒後重試
-            return get_tender_detail(unit_id, job_number)  # 遞迴重試一次
+            logger.warning(f"API 請求過於頻繁，重試後仍失敗 ({unit_id}/{job_number})")
+            return None
         logger.error(f"查詢標案詳細資料失敗 ({unit_id}/{job_number}): HTTP {e.response.status_code}")
         return None
     except requests.exceptions.Timeout:
