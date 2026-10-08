@@ -1,4 +1,4 @@
-"""政府採購網 API 呼叫，經 Cloudflare Workers 上的 cf-fetch-proxy 轉發（解決 GitHub Actions IP 封鎖問題）"""
+"""政府採購網 API 呼叫，經 Cloudflare Workers 上的 crawler-proxy 轉發（解決 GitHub Actions IP 封鎖問題）"""
 import os
 import time
 from urllib.parse import urlencode
@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 import requests
 
 PCC_API_BASE = "https://pcc-api.openfun.app/api"
-PROXY_URL = os.getenv("PCC_PROXY_URL", "https://cf-fetch-proxy.alexabc.workers.dev/")
+PROXY_URL = os.getenv("PCC_PROXY_URL", "https://crawler-proxy.alexabc.workers.dev/")
 
 # 被限流（429）時重試，等待時間依序加倍：10、20、40 秒
 MAX_RETRIES = 3
