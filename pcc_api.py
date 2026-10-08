@@ -10,4 +10,13 @@ PROXY_URL = os.getenv("PCC_PROXY_URL", "https://cf-fetch-proxy.alexabc.workers.d
 
 def pcc_get(path, params, timeout):
     target = f"{PCC_API_BASE}/{path}?{urlencode(params)}"
-    return requests.get(PROXY_URL, params={"url": target}, timeout=timeout)
+    response = requests.get(PROXY_URL, params={"url": target}, timeout=timeout)
+    if response.status_code >= 400:
+        h = response.headers
+        print(
+            f"BUGFIX/pcc-403 path={path} status={response.status_code} "
+            f"x-proxy-by={h.get('x-proxy-by')} server={h.get('server')} cf-ray={h.get('cf-ray')} "
+            f"ctype={h.get('content-type')} body={response.text[:200]!r}",
+            flush=True,
+        )
+    return response
